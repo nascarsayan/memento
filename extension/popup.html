@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Memento</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Memento</h1>
+    
+    <div class="section">
+      <h2>Recent Captures</h2>
+      <div id="recentCaptures" class="captures-list"></div>
+      <button id="manualCaptureBtn">Capture Current Page</button>
+      <div id="captureStatus" class="status"></div>
+    </div>
+    
+    <div class="section">
+      <h2>Search Your Pages</h2>
+      <div class="search-container">
+        <input type="text" id="searchInput" placeholder="Search captured pages...">
+        <button id="searchBtn">Search</button>
+      </div>
+      <div id="searchResults" class="results"></div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Indexed Pages - Memento</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      color: #4285f4;
+    }
+    .page-list {
+      margin-top: 20px;
+    }
+    .page-item {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .page-title {
+      font-size: 18px;
+      font-weight: bold;
+      color: #1a73e8;
+    }
+    .page-url {
+      color: #0d652d;
+      margin: 5px 0;
+    }
+    .page-date {
+      color: #5f6368;
+      font-size: 14px;
+    }
+    .page-content {
+      margin-top: 10px;
+      border-top: 1px solid #eee;
+      padding-top: 10px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .empty-message {
+      text-align: center;
+      padding: 50px;
+      color: #5f6368;
+    }
+  </style>
+</head>
+<body>
+  <h1>Indexed Pages</h1>
+  <div id="pageList" class="page-list">
+    <div class="empty-message">Loading indexed pages...</div>
+  </div>
+  
+  <script src="indexed-pages.js"></script>
+</body>
+</html>

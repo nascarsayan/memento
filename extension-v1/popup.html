@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memento Web Indexer</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 10px;
+      font-family: system-ui, sans-serif;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      margin: 5px 0;
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #3b78e7;
+    }
+    .status {
+      margin-top: 10px;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <h2>Memento Web Indexer</h2>
+  <button id="indexButton">Index This Page</button>
+  <button id="viewIndexedButton">View Indexed Pages</button>
+  <div id="status" class="status"></div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

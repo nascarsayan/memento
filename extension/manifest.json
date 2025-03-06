@@ -2,16 +2,31 @@
   "manifest_version": 3,
   "name": "Memento",
   "version": "1.0",
-  "description": "Capture and index web page content for local search",
+  "description": "Auto-capture web pages for local knowledge management",
   "permissions": [
-    "activeTab",
-    "storage",
     "tabs",
+    "storage",
     "scripting",
     "downloads"
   ],
   "host_permissions": [
     "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["viewport-tracker.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["turndown.js"],
+      "matches": ["<all_urls>"]
+    }
   ],
   "action": {
     "default_popup": "popup.html",
@@ -21,19 +36,6 @@
       "128": "icons/icon128.png"
     }
   },
-  "background": {
-    "service_worker": "background.js"
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"]
-    }
-  ],
-  "web_accessible_resources": [{
-    "resources": ["turndown.js"],
-    "matches": ["<all_urls>"]
-  }],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   }

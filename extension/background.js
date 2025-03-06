@@ -2,15 +2,37 @@
 const SERVER_URL = 'http://localhost:8080';
 const SAVE_DIR = 'memento_pages';
 const CAPTURE_DELAY_MS = 10000; // 10 seconds
+const INTERACTION_TRACKING_INTERVAL = 500; // Track interactions every 500ms
 
 // Track pending capture timeouts
 const pendingCaptures = new Map();
+
+// Track page interactions per tab
+const pageInteractions = new Map();
 
 // Generate a unique filename based on the URL and timestamp
 function generateFilename(url) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const urlSafe = url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 100);
   return `${timestamp}_${urlSafe}`;
+}
+
+// Initialize interaction tracking for a tab
+function initInteractionTracking(tabId) {
+  if (!pageInteractions.has(tabId)) {
+    pageInteractions.set(tabId, {
+      viewportData: {},
+      cursorMovement: 0,
+      scrollEvents: 0,
+      startTime: Date.now()
+    });
+    
+    // Inject the tracking content script
+    chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['viewport-tracker.js']
+    }).catch(err => console.error('Failed to inject tracking script:', err));
+  }
 }
 
 // Auto-capture when page loads completely, but only after delay
@@ -21,6 +43,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
   
   if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
+    // Initialize interaction tracking
+    initInteractionTracking(tabId);
+    
     // Set a new timeout for this tab
     const timeoutId = setTimeout(() => {
       captureAndSavePage(tabId);
@@ -37,11 +62,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     clearTimeout(pendingCaptures.get(tabId));
     pendingCaptures.delete(tabId);
   }
+  
+  if (pageInteractions.has(tabId)) {
+    pageInteractions.delete(tabId);
+  }
 });
 
 // Capture DOM from the current tab
 async function capturePage(tabId) {
   try {
+    // Get interaction data before capturing
+    const interactionData = pageInteractions.get(tabId) || {};
+    
     // Execute script to get full page content
     const results = await chrome.scripting.executeScript({
       target: { tabId },
@@ -56,7 +88,10 @@ async function capturePage(tabId) {
     });
     
     if (!results || !results[0]) return null;
-    return results[0].result;
+    return {
+      ...results[0].result,
+      interactionData
+    };
   } catch (error) {
     console.error('Error capturing page:', error);
     return null;
@@ -75,7 +110,7 @@ async function convertToMarkdown(tabId, pageData) {
     // Now execute the conversion script using Turndown
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      function: () => {
+      function: (interactionData) => {
         // Get document and simplify it
         function simplifyHtml(html) {
           const parser = new DOMParser();
@@ -123,9 +158,54 @@ async function convertToMarkdown(tabId, pageData) {
           bulletListMarker: '-'
         });
         
-        // Convert to markdown
+        // Add viewport weightage data
+        if (interactionData && interactionData.viewportData) {
+          // Clone the main content to add weightage comments
+          const contentWithWeightage = mainContent.cloneNode(true);
+          
+          // Add importance markers to elements based on interaction data
+          Object.entries(interactionData.viewportData).forEach(([selector, data]) => {
+            try {
+              const elements = contentWithWeightage.querySelectorAll(selector);
+              if (elements.length > 0) {
+                elements.forEach(el => {
+                  // Create and insert weightage comment
+                  const weightageComment = document.createComment(
+                    `IMPORTANCE: ${data.timeVisible}ms, VISIBILITY: ${Math.round(data.visibilityPercentage)}%`
+                  );
+                  el.parentNode.insertBefore(weightageComment, el);
+                  
+                  // Add data attribute for Turndown to potentially use
+                  el.setAttribute('data-importance', data.timeVisible);
+                  el.setAttribute('data-visibility', data.visibilityPercentage);
+                });
+              }
+            } catch (e) {
+              console.error('Error adding importance markers:', e);
+            }
+          });
+          
+          // Custom rule to add weightage in markdown
+          turndownService.addRule('importanceRule', {
+            filter: (node) => {
+              return node.getAttribute && 
+                     node.getAttribute('data-importance') !== null &&
+                     node.getAttribute('data-visibility') !== null;
+            },
+            replacement: (content, node) => {
+              const importance = node.getAttribute('data-importance');
+              const visibility = node.getAttribute('data-visibility');
+              return `${content}\n\n<!-- IMPORTANCE: ${importance}ms, VISIBILITY: ${visibility}% -->\n\n`;
+            }
+          });
+          
+          return turndownService.turndown(contentWithWeightage);
+        }
+        
+        // Default conversion without weightage
         return turndownService.turndown(mainContent);
-      }
+      },
+      args: [pageData.interactionData]
     });
     
     if (!results || !results[0] || !results[0].result) {
@@ -155,8 +235,24 @@ async function savePageData(pageData, tabId) {
     // Convert to Markdown and save
     const markdownContent = await convertToMarkdown(tabId, pageData);
     if (markdownContent) {
-      // Add title and URL to the markdown content
-      const markdownWithMeta = `# ${pageData.title}\n\nURL: ${pageData.url}\n\n${markdownContent}`;
+      // Add title, URL and interaction summary to the markdown content
+      let markdownWithMeta = `# ${pageData.title}\n\nURL: ${pageData.url}\n\n`;
+      
+      // Add interaction summary if available
+      if (pageData.interactionData) {
+        const interaction = pageData.interactionData;
+        const duration = Date.now() - interaction.startTime;
+        markdownWithMeta += `<!-- 
+INTERACTION SUMMARY:
+- Duration: ${duration}ms
+- Scroll Events: ${interaction.scrollEvents || 0}
+- Cursor Movement: ${interaction.cursorMovement || 0}
+-->
+
+`;
+      }
+      
+      markdownWithMeta += markdownContent;
       
       chrome.downloads.download({
         url: `data:text/markdown;charset=utf-8,${encodeURIComponent(markdownWithMeta)}`,
@@ -165,6 +261,16 @@ async function savePageData(pageData, tabId) {
       });
       
       metadata.hasMarkdown = true;
+      
+      // Add interaction data to metadata
+      if (pageData.interactionData) {
+        metadata.interaction = {
+          duration: Date.now() - pageData.interactionData.startTime,
+          scrollEvents: pageData.interactionData.scrollEvents || 0,
+          cursorMovement: pageData.interactionData.cursorMovement || 0,
+          viewportDataSummary: Object.keys(pageData.interactionData.viewportData || {}).length
+        };
+      }
     } else {
       metadata.hasMarkdown = false;
     }
@@ -234,7 +340,7 @@ async function searchContent(query) {
   }
 }
 
-// Listen for messages from popup or content script
+// Listen for messages from popup, content script or viewport tracker
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'capturePage') {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
@@ -269,5 +375,49 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(results => sendResponse({ success: true, results }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true; // Keep the message channel open for async response
+  }
+  
+  // Handle interaction data updates from the viewport tracker
+  if (request.action === 'updateInteractionData' && sender.tab) {
+    const tabId = sender.tab.id;
+    
+    if (!pageInteractions.has(tabId)) {
+      pageInteractions.set(tabId, {
+        viewportData: {},
+        cursorMovement: 0,
+        scrollEvents: 0,
+        startTime: Date.now()
+      });
+    }
+    
+    const currentData = pageInteractions.get(tabId);
+    
+    // Update viewport data
+    if (request.viewportData) {
+      Object.entries(request.viewportData).forEach(([selector, data]) => {
+        if (!currentData.viewportData[selector]) {
+          currentData.viewportData[selector] = data;
+        } else {
+          // Aggregate time visible
+          currentData.viewportData[selector].timeVisible += data.timeVisible;
+          // Update max visibility percentage if higher
+          currentData.viewportData[selector].visibilityPercentage = 
+            Math.max(currentData.viewportData[selector].visibilityPercentage, data.visibilityPercentage);
+        }
+      });
+    }
+    
+    // Update interaction metrics
+    if (request.cursorMovement) {
+      currentData.cursorMovement += request.cursorMovement;
+    }
+    
+    if (request.scrollEvents) {
+      currentData.scrollEvents += request.scrollEvents;
+    }
+    
+    pageInteractions.set(tabId, currentData);
+    sendResponse({ success: true });
+    return true;
   }
 });

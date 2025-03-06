@@ -6,3 +6,6 @@
 
 ---
 
+can we provide importance to the part of the page which is inside the viewport, and capture what portion of page has been how much inside viewport.. add those weightage in some markdown tag while saving. aggregate weightage to page parts according to total duration, cursor movement, scroll speed, etc. and save weigtage to parts of the document
+
+---

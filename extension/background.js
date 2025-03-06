@@ -1,6 +1,10 @@
 // Server configurations
 const SERVER_URL = 'http://localhost:8080';
 const SAVE_DIR = 'memento_pages';
+const CAPTURE_DELAY_MS = 10000; // 10 seconds
+
+// Track pending capture timeouts
+const pendingCaptures = new Map();
 
 // Generate a unique filename based on the URL and timestamp
 function generateFilename(url) {
@@ -9,10 +13,29 @@ function generateFilename(url) {
   return `${timestamp}_${urlSafe}`;
 }
 
-// Auto-capture when page loads completely
+// Auto-capture when page loads completely, but only after delay
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Clear any existing timeout for this tab
+  if (pendingCaptures.has(tabId)) {
+    clearTimeout(pendingCaptures.get(tabId));
+  }
+  
   if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
-    captureAndSavePage(tabId);
+    // Set a new timeout for this tab
+    const timeoutId = setTimeout(() => {
+      captureAndSavePage(tabId);
+      pendingCaptures.delete(tabId);
+    }, CAPTURE_DELAY_MS);
+    
+    pendingCaptures.set(tabId, timeoutId);
+  }
+});
+
+// Clear pending captures when tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (pendingCaptures.has(tabId)) {
+    clearTimeout(pendingCaptures.get(tabId));
+    pendingCaptures.delete(tabId);
   }
 });
 
@@ -43,26 +66,32 @@ async function capturePage(tabId) {
 // Convert HTML content to Markdown
 async function convertToMarkdown(tabId, pageData) {
   try {
+    // Execute script to load Turndown first
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['turndown.js']
+    });
+
+    // Now execute the conversion script using Turndown
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       function: () => {
-        // This is a simplified HTML to Markdown conversion.
-        // In a real implementation, you'd use a more robust library or algorithm.
-        function simplifyHtml(node) {
-          // Create a clone of the node to avoid modifying the original DOM
-          const clone = node.cloneNode(true);
+        // Get document and simplify it
+        function simplifyHtml(html) {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
           
           // Remove script tags, style tags, comments, etc.
           const elementsToRemove = ['script', 'style', 'iframe', 'noscript', 'svg', 'canvas'];
           elementsToRemove.forEach(tag => {
-            const elements = clone.querySelectorAll(tag);
+            const elements = doc.querySelectorAll(tag);
             elements.forEach(el => el.parentNode.removeChild(el));
           });
           
-          return clone;
+          return doc;
         }
         
-        function getMainContent(document) {
+        function getMainContent(doc) {
           // Try to identify the main content area
           const contentSelectors = [
             'article',
@@ -74,81 +103,28 @@ async function convertToMarkdown(tabId, pageData) {
           ];
           
           for (const selector of contentSelectors) {
-            const element = document.querySelector(selector);
+            const element = doc.querySelector(selector);
             if (element) return element;
           }
           
           // Fallback to body if no specific content area is found
-          return document.body;
+          return doc.body;
         }
         
-        function htmlToMarkdown(element) {
-          let markdown = '';
-          
-          // Process headings
-          const headings = element.querySelectorAll('h1, h2, h3, h4, h5, h6');
-          headings.forEach(heading => {
-            const level = parseInt(heading.tagName[1]);
-            const prefix = '#'.repeat(level) + ' ';
-            heading.innerHTML = prefix + heading.innerText.trim();
-          });
-          
-          // Process paragraphs
-          const paragraphs = element.querySelectorAll('p');
-          paragraphs.forEach(p => {
-            p.innerHTML = p.innerText.trim() + '\n\n';
-          });
-          
-          // Process links
-          const links = element.querySelectorAll('a');
-          links.forEach(link => {
-            const text = link.innerText.trim();
-            const href = link.getAttribute('href');
-            if (href && text) {
-              link.innerHTML = `[${text}](${href})`;
-            }
-          });
-          
-          // Process lists
-          const listItems = element.querySelectorAll('li');
-          listItems.forEach(li => {
-            const parent = li.parentElement;
-            const prefix = parent.tagName === 'OL' ? '1. ' : '- ';
-            li.innerHTML = prefix + li.innerText.trim();
-          });
-          
-          // Process images
-          const images = element.querySelectorAll('img');
-          images.forEach(img => {
-            const alt = img.getAttribute('alt') || '';
-            const src = img.getAttribute('src') || '';
-            if (src) {
-              img.outerHTML = `![${alt}](${src})`;
-            }
-          });
-          
-          // Convert blockquotes
-          const quotes = element.querySelectorAll('blockquote');
-          quotes.forEach(quote => {
-            const lines = quote.innerText.trim().split('\n');
-            quote.innerHTML = lines.map(line => `> ${line}`).join('\n');
-          });
-          
-          // Extract text from cleaned HTML
-          return element.innerText
-            .replace(/\n{3,}/g, '\n\n')  // Remove excessive newlines
-            .trim();
-        }
+        // Parse the HTML content
+        const doc = simplifyHtml(document.documentElement.outerHTML);
+        const mainContent = getMainContent(doc);
         
-        // Get document and simplify
-        const doc = document.cloneNode(true);
-        const simplified = simplifyHtml(doc);
-        
-        // Get the main content
-        const mainContent = getMainContent(simplified);
+        // Use TurndownService to convert HTML to Markdown
+        const turndownService = new TurndownService({
+          headingStyle: 'atx',
+          codeBlockStyle: 'fenced',
+          emDelimiter: '*',
+          bulletListMarker: '-'
+        });
         
         // Convert to markdown
-        return htmlToMarkdown(mainContent);
+        return turndownService.turndown(mainContent);
       }
     });
     
@@ -166,54 +142,47 @@ async function convertToMarkdown(tabId, pageData) {
 // Save the captured DOM to a local file
 async function savePageData(pageData, tabId) {
   const baseFilename = generateFilename(pageData.url);
-  const htmlFilename = `${baseFilename}.html`;
   const mdFilename = `${baseFilename}.md`;
   
   const metadata = {
     url: pageData.url,
     title: pageData.title,
     timestamp: pageData.timestamp,
-    htmlFilename: htmlFilename,
     mdFilename: mdFilename
   };
   
-  // Create a blob with the HTML content
-  const htmlBlob = new Blob([pageData.content], { type: 'text/html' });
-  
-  // Save the HTML content
-  chrome.downloads.download({
-    url: URL.createObjectURL(htmlBlob),
-    filename: `${SAVE_DIR}/${htmlFilename}`,
-    saveAs: false
-  });
-  
-  // Convert to Markdown and save
-  const markdownContent = await convertToMarkdown(tabId, pageData);
-  if (markdownContent) {
-    // Add title and URL to the markdown content
-    const markdownWithMeta = `# ${pageData.title}\n\nURL: ${pageData.url}\n\n${markdownContent}`;
-    const mdBlob = new Blob([markdownWithMeta], { type: 'text/markdown' });
+  try {
+    // Convert to Markdown and save
+    const markdownContent = await convertToMarkdown(tabId, pageData);
+    if (markdownContent) {
+      // Add title and URL to the markdown content
+      const markdownWithMeta = `# ${pageData.title}\n\nURL: ${pageData.url}\n\n${markdownContent}`;
+      
+      chrome.downloads.download({
+        url: `data:text/markdown;charset=utf-8,${encodeURIComponent(markdownWithMeta)}`,
+        filename: `${SAVE_DIR}/${mdFilename}`,
+        saveAs: false
+      });
+      
+      metadata.hasMarkdown = true;
+    } else {
+      metadata.hasMarkdown = false;
+    }
     
+    // Save metadata as JSON
     chrome.downloads.download({
-      url: URL.createObjectURL(mdBlob),
-      filename: `${SAVE_DIR}/${mdFilename}`,
+      url: `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(metadata, null, 2))}`,
+      filename: `${SAVE_DIR}/${baseFilename}.json`,
       saveAs: false
+    }, (downloadId) => {
+      console.log(`Metadata JSON saved successfully: ${SAVE_DIR}/${baseFilename}.json`);
     });
     
-    metadata.hasMarkdown = true;
-  } else {
-    metadata.hasMarkdown = false;
+    return metadata;
+  } catch (error) {
+    console.error('Error saving page data:', error);
+    return metadata;
   }
-  
-  // Save metadata as JSON
-  const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
-  chrome.downloads.download({
-    url: URL.createObjectURL(metadataBlob),
-    filename: `${SAVE_DIR}/${baseFilename}.json`,
-    saveAs: false
-  });
-  
-  return metadata;
 }
 
 // Capture and save the page automatically

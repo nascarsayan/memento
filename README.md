@@ -6,6 +6,13 @@ For the forgetful, by the forgetful - Capture and index your journey on the inte
 ## What is Memento?
 Memento is a browser extension that helps you remember and search through websites you've visited. It captures the content of web pages you browse, indexes them locally, and allows you to search through them later, even when offline.
 
+## Development Status
+
+- [x] Capture and store the DOM content of web pages
+- [] Give importance to content based on user interaction
+- [] Implement a search interface in the browser extension
+- [] Implement the indexing process
+
 ## Features
 - **Web Page Capture**: Automatically saves the DOM content of pages you visit
 - **Local Indexing**: Processes and indexes captured content for efficient searching
